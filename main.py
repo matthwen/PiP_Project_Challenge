@@ -170,20 +170,6 @@ def evaluate_model(model: torch.nn.Module, dataloader: torch.utils.data.DataLoad
             if testrun is True and count > 10:
                 break
             inputs, crop_array, targets, means, stds = data
-            # inputs = inputs.to(device)
-            # targets = targets.to(device)
-            # inputs = inputs.unsqueeze(1).float()
-            # outputs = model(inputs)
-            #
-            # outputs = outputs.squeeze(1)
-            # target_masks = crop_array.to(dtype=torch.bool)
-            # predictions = [outputs[i, target_masks[i]] for i in range(len(outputs))]
-            #
-            # tmp = []
-            # if denormalize is True:
-            #     for index, prediction in enumerate(predictions):
-            #         tmp.append(prediction * stds[index] + means[index])
-            # predictions = tmp
             predictions, _ = predict(device, model, denormalize, inputs, crop_array, targets, means, stds)
 
             loss += (torch.stack(
@@ -201,19 +187,12 @@ def predict(device, model, denormalize, inputs, crop_array, targets, means, stds
     outputs = outputs.squeeze(1)
     target_masks = crop_array.to(dtype=torch.bool)
     predictions = [outputs[i, target_masks[i]] for i in range(len(outputs))]
-
-    # out = []
-    # if denormalize is True:
-    #     for index in range(len(outputs)):
-    #         print(index)
-    #         output = outputs[index]
-    #         out.append(output * stds[index] + means[index])
-    # #predictions = tmp
     return predictions, outputs
 
 
 def score(target_file: str, model_path: str, prediction_file: str):
     score_predict(target_file, model_path, prediction_file)
+    #scoring broken, also pointless since there are no targets
     #loss = score_pickles(prediction_file, target_file)
     #print(loss)
     return
@@ -245,37 +224,6 @@ def score_predict(target_file: str, model_path: str, prediction_file: str):
 
 
 def score_pickles(prediction_file: str, target_file: str):
-    # with open(prediction_file, 'rb') as pfh:
-    #     predictions_full = pickle.load(pfh)
-    #
-    # predictions_cropped = [utils.crop(img, size, center) for img, size, center in predictions_full]
-    # predictions = [target_array for image_array, crop_array, target_array in predictions_cropped]
-    #
-    # if not isinstance(predictions, list):
-    #     raise TypeError(f"Expected a list of numpy arrays as pickle file. "
-    #                     f"Got {type(predictions)} object in pickle file instead.")
-    # if not all([isinstance(prediction, np.ndarray) and np.uint8 == prediction.dtype
-    #             for prediction in predictions]):
-    #     raise TypeError("List of predictions contains elements which are not numpy arrays of dtype uint8")
-    #
-    # # Load targets
-    # with open(target_file, 'rb') as tfh:
-    #     targets = pickle.load(tfh)
-    #
-    # targets_cropped = []
-    # for index, image in enumerate(targets["images"]):
-    #     image_array, crop_array, target_array = utils.crop(image,targets["crop_sizes"][index], targets["crop_centers"][index])
-    #     targets_cropped.append(target_array)
-    # #targets = targets["images"]
-    #
-    # if len(targets_cropped) != len(predictions):
-    #     raise IndexError(f"list of targets has {len(targets)} elements "
-    #                      f"but list of submitted predictions has {len(predictions)} elements.")
-    #
-    # mses = [mse(target, prediction) for target, prediction in zip(targets_cropped, predictions)]
-    #
-    # return np.mean(mses)
-
     with open(prediction_file, 'rb') as pfh:
         predictions = pickle.load(pfh)
     if not isinstance(predictions, list):

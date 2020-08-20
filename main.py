@@ -1,151 +1,111 @@
 # -*- coding: utf-8 -*-
-"""example_project/main.py
-
-Author -- Michael Widrich
-Contact -- widrich@ml.jku.at
-Date -- 01.02.2020
-
-###############################################################################
-
-The following copyright statement applies to all code within this file.
-
-Copyright statement:
-This material, no matter whether in printed or electronic form, may be used for
-personal and non-commercial educational use only. Any reproduction of this
-manuscript, no matter whether as a whole or in parts, no matter whether in
-printed or in electronic form, requires explicit prior acceptance of the
-authors.
-
-###############################################################################
-
-Main file of example project.
-"""
 
 import os
+import sys
 import numpy as np
 import torch
-import torch.utils.data
-from datasets import CIFAR10, RotatedImages
+import torch.utils.data as tud
+import datasets
 from utils import plot
 from architectures import SimpleCNN
 import torchvision.transforms as transforms
 from torch.utils.tensorboard import SummaryWriter
 import tqdm
+import utils
+from time import strftime, localtime
+import shutil
+import dill as pickle
 
 
-def evaluate_model(model: torch.nn.Module, dataloader: torch.utils.data.DataLoader, device: torch.device):
-    """Function for evaluation of a model `model` on the data in `dataloader` on device `device`"""
-    # Define a loss (mse loss)
-    mse = torch.nn.MSELoss()
-    # We will accumulate the mean loss in variable `loss`
-    loss = torch.tensor(0., device=device)
-    with torch.no_grad():  # We do not need gradients for evaluation
-        # Loop over all samples in `dataloader`
-        for data in tqdm.tqdm(dataloader, desc="scoring", position=0):
-            # Get a sample and move inputs and targets to device
-            inputs, targets, file_names = data
-            inputs = inputs.to(device)
-            targets = targets.to(device)
-            
-            # Get outputs for network
-            outputs = model(inputs)
-            
-            # Here we could clamp the outputs to the minimum and maximum values of inputs for better performance
-            
-            # Calculate mean mse loss over all samples in dataloader (accumulate mean losses in `loss`)
-            loss += (torch.stack([mse(output, target) for output, target in zip(outputs, targets)]).sum()
-                     / len(dataloader.dataset))
-    return loss
+def main(data_path, results_path="Results", network_config: dict = None, learningrate: int = 1e-3,
+         weight_decay: float = 1e-5,
+         n_updates: int = 100, device: torch.device = torch.device("cuda:0"), testrun=False,
+         memory_debug=False, batch_size=1,
+         num_workers=1):
+    dt_suffix = strftime("%Y_%m_%d_%H_%M_%S", localtime())
+    if results_path is not None:
+        results_path = os.path.join(results_path, dt_suffix)
+        plotpath = os.path.join(results_path, 'plots')
+        os.makedirs(plotpath, exist_ok=True)
+        # copy config
+        # shutil.copy2(os.path.dirname(sys.argv[0]) + "/working_config.json", results_path)
+        shutil.copy2("working_config.json", results_path)
+    data = datasets.ChallengeImagesReducedBatched(data_folder=data_path)
+    data_len = len(data)
 
+    train_set = tud.Subset(data, indices=np.arange(int(data_len * (3 / 5))))
+    val_set = tud.Subset(data, indices=np.arange(int(data_len * (3 / 5)), int(data_len * (4 / 5))))
+    test_set = tud.Subset(data, indices=np.arange(int(data_len * (4 / 5)), data_len))
 
-def main(results_path, network_config: dict, learningrate: int = 1e-3, weight_decay: float = 1e-5,
-         n_updates: int = int(1e5), device: torch.device = torch.device("cuda:0")):
-    """Main function that takes hyperparameters and performs training and evaluation of model"""
-    # Prepare a path to plot to
-    plotpath = os.path.join(results_path, 'plots')
-    os.makedirs(plotpath, exist_ok=True)
-    
-    # Load or download CIFAR10 dataset
-    cifar10_dataset = CIFAR10(data_folder='cifar10')
-    
-    # Split dataset into training, validation, and test set randomly
-    trainingset = torch.utils.data.Subset(cifar10_dataset, indices=np.arange(int(len(cifar10_dataset)*(3/5))))
-    validationset = torch.utils.data.Subset(cifar10_dataset, indices=np.arange(int(len(cifar10_dataset)*(3/5)),
-                                                                               int(len(cifar10_dataset)*(4/5))))
-    testset = torch.utils.data.Subset(cifar10_dataset, indices=np.arange(int(len(cifar10_dataset)*(4/5)),
-                                                                         len(cifar10_dataset)))
-
-    # Create datasets and dataloaders with rotated targets without augmentation (for evaluation)
-    trainingset_eval = RotatedImages(dataset=trainingset, rotation_angle=45.)
-    validationset = RotatedImages(dataset=validationset, rotation_angle=45.)
-    testset = RotatedImages(dataset=testset, rotation_angle=45.)
-    trainloader = torch.utils.data.DataLoader(trainingset_eval, batch_size=1, shuffle=False, num_workers=0)
-    valloader = torch.utils.data.DataLoader(validationset, batch_size=1, shuffle=False, num_workers=0)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=1, shuffle=False, num_workers=0)
-    
-    # Create datasets and dataloaders with rotated targets with augmentation (for training)
-    trainingset_augmented = RotatedImages(dataset=trainingset, rotation_angle=45.,
-                                          transform_chain=transforms.Compose([transforms.RandomHorizontalFlip(),
-                                                                            transforms.RandomVerticalFlip()]))
-    trainloader_augmented = torch.utils.data.DataLoader(trainingset_augmented, batch_size=16, shuffle=True,
-                                                        num_workers=0)
-    
-    # Define a tensorboard summary writer that writes to directory "results_path/tensorboard"
-    writer = SummaryWriter(log_dir=os.path.join(results_path, 'tensorboard'))
-    
-    # Create Network
-    net = SimpleCNN(**network_config)
+    collate_fn = datasets.collate_fn if batch_size > 1 else None
+    train_loader = tud.DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers,
+                                  collate_fn=collate_fn)
+    val_loader = tud.DataLoader(val_set, batch_size=batch_size, shuffle=True, num_workers=num_workers,
+                                collate_fn=collate_fn)
+    test_loader = tud.DataLoader(test_set, batch_size=batch_size, shuffle=True, num_workers=num_workers,
+                                 collate_fn=collate_fn)
+    if network_config is not None:
+        net = SimpleCNN(**network_config)
+    else:
+        net = SimpleCNN()
     net.to(device)
-    
-    # Get mse loss function
+
     mse = torch.nn.MSELoss()
-    
-    # Get adam optimizer
+
     optimizer = torch.optim.Adam(net.parameters(), lr=learningrate, weight_decay=weight_decay)
-    
-    print_stats_at = 1e2  # print status to tensorboard every x updates
-    plot_at = 1e4  # plot every x updates
-    validate_at = 5e3  # evaluate model on validation set and check for new best model every x updates
-    update = 0  # current update counter
-    best_validation_loss = np.inf  # best validation loss so far
+
+    writer = SummaryWriter(log_dir=os.path.join(results_path, 'tensorboard'))
+
+    print_stats_at = 1e2
+    plot_at = 1e4
+    validate_at = 5e3
+    update = 0
+    best_validation_loss = np.inf
     update_progess_bar = tqdm.tqdm(total=n_updates, desc=f"loss: {np.nan:7.5f}", position=0)  # progressbar
 
     # Save initial model as "best" model (will be overwritten later)
     torch.save(net, os.path.join(results_path, 'best_model.pt'))
-    
-    # Train until n_updates update have been reached
+
     while update < n_updates:
-        for data in trainloader_augmented:
-            # Get next samples in `trainloader_augmented`
-            inputs, targets, ids = data
+        for data in train_loader:
+            inputs, crop_array, targets, means, stds = data
             inputs = inputs.to(device)
-            targets = targets.to(device)
-            
-            # Reset gradients
+            targets = targets.to(device).float()
+
             optimizer.zero_grad()
-            
-            # Get outputs for network
+            inputs = inputs.unsqueeze(1).float()
+
             outputs = net(inputs)
-            
-            # Calculate loss, do backward pass, and update weights
-            loss = mse(outputs, targets)
+            outputs = outputs.squeeze(1)
+            target_masks = crop_array.to(dtype=torch.bool)
+
+            # loss = mse(predictions, targets.reshape((-1,)))
+
+            if batch_size == 1:
+                prediction = outputs[0, target_masks[0]]
+                loss = mse(prediction, targets[0].reshape((-1,)))
+            else:
+                predictions = [outputs[i, target_masks[i]] for i in range(len(outputs))]
+                losses = torch.stack(
+                    [mse(prediction, target.reshape((-1,))) for prediction, target in zip(predictions, targets)])
+                loss = losses.mean()
+
             loss.backward()
             optimizer.step()
-            
-            # Print current status and score
+
             if update % print_stats_at == 0 and update > 0:
                 writer.add_scalar(tag="training/loss",
                                   scalar_value=loss.cpu(),
                                   global_step=update)
-            
+
             # Plot output
             if update % plot_at == 0:
                 plot(inputs.detach().cpu().numpy(), targets.detach().cpu().numpy(), outputs.detach().cpu().numpy(),
                      plotpath, update)
-            
+
             # Evaluate model on validation set
             if update % validate_at == 0 and update > 0:
-                val_loss = evaluate_model(net, dataloader=valloader, device=device)
+                val_loss = evaluate_model(net, dataloader=val_loader, device=device, testrun=testrun)
                 writer.add_scalar(tag="validation/loss", scalar_value=val_loss.cpu(), global_step=update)
                 # Add weights as arrays to tensorboard
                 for i, param in enumerate(net.parameters()):
@@ -160,30 +120,34 @@ def main(results_path, network_config: dict, learningrate: int = 1e-3, weight_de
                 if best_validation_loss > val_loss:
                     best_validation_loss = val_loss
                     torch.save(net, os.path.join(results_path, 'best_model.pt'))
-            
+
             update_progess_bar.set_description(f"loss: {loss:7.5f}", refresh=True)
             update_progess_bar.update()
-            
+
+            if memory_debug is True:
+                utils.debug_memory()
+
             # Increment update counter, exit if maximum number of updates is reached
             update += 1
             if update >= n_updates:
                 break
 
+            torch.cuda.empty_cache()
+
     update_progess_bar.close()
     print('Finished Training!')
-    
-    # Load best model and compute score on test set
+
     print(f"Computing scores for best model")
     net = torch.load(os.path.join(results_path, 'best_model.pt'))
-    test_loss = evaluate_model(net, dataloader=testloader, device=device)
-    val_loss = evaluate_model(net, dataloader=valloader, device=device)
-    train_loss = evaluate_model(net, dataloader=trainloader, device=device)
-    
+    test_loss = evaluate_model(net, dataloader=test_loader, device=device, testrun=testrun)
+    val_loss = evaluate_model(net, dataloader=val_loader, device=device, testrun=testrun)
+    train_loss = evaluate_model(net, dataloader=train_loader, device=device, testrun=testrun)
+
     print(f"Scores:")
     print(f"test loss: {test_loss}")
     print(f"validation loss: {val_loss}")
     print(f"training loss: {train_loss}")
-    
+
     # Write result to file
     with open(os.path.join(results_path, 'results.txt'), 'w') as fh:
         print(f"Scores:", file=fh)
@@ -191,16 +155,170 @@ def main(results_path, network_config: dict, learningrate: int = 1e-3, weight_de
         print(f"validation loss: {val_loss}", file=fh)
         print(f"training loss: {train_loss}", file=fh)
 
+    ################################
+
+
+def evaluate_model(model: torch.nn.Module, dataloader: torch.utils.data.DataLoader, device: torch.device, testrun=True,
+                   denormalize=False):
+    """Function for evaluation of a model `model` on the data in `dataloader` on device `device`"""
+    mse = torch.nn.MSELoss()
+    loss = torch.tensor(0., device=device)
+    with torch.no_grad():
+        count = 0
+        for data in tqdm.tqdm(dataloader, desc="scoring", position=0):
+            count += 1
+            if testrun is True and count > 10:
+                break
+            inputs, crop_array, targets, means, stds = data
+            # inputs = inputs.to(device)
+            # targets = targets.to(device)
+            # inputs = inputs.unsqueeze(1).float()
+            # outputs = model(inputs)
+            #
+            # outputs = outputs.squeeze(1)
+            # target_masks = crop_array.to(dtype=torch.bool)
+            # predictions = [outputs[i, target_masks[i]] for i in range(len(outputs))]
+            #
+            # tmp = []
+            # if denormalize is True:
+            #     for index, prediction in enumerate(predictions):
+            #         tmp.append(prediction * stds[index] + means[index])
+            # predictions = tmp
+            predictions, _ = predict(device, model, denormalize, inputs, crop_array, targets, means, stds)
+
+            loss += (torch.stack(
+                [mse(prediction, target.reshape((-1,))) for prediction, target in zip(predictions, targets)]).sum()
+                     / len(dataloader.dataset))
+    return loss
+
+
+def predict(device, model, denormalize, inputs, crop_array, targets, means, stds):
+    inputs = inputs.to(device)
+    targets = targets.to(device)
+    inputs = inputs.unsqueeze(1).float()
+    outputs = model(inputs)
+
+    outputs = outputs.squeeze(1)
+    target_masks = crop_array.to(dtype=torch.bool)
+    predictions = [outputs[i, target_masks[i]] for i in range(len(outputs))]
+
+    # out = []
+    # if denormalize is True:
+    #     for index in range(len(outputs)):
+    #         print(index)
+    #         output = outputs[index]
+    #         out.append(output * stds[index] + means[index])
+    # #predictions = tmp
+    return predictions, outputs
+
+
+def score(target_file: str, model_path: str, prediction_file: str):
+    score_predict(target_file, model_path, prediction_file)
+    #loss = score_pickles(prediction_file, target_file)
+    #print(loss)
+    return
+
+
+def score_predict(target_file: str, model_path: str, prediction_file: str):
+    with open(target_file, 'rb') as tfh:
+        scoring_data = pickle.load(tfh)
+    outputs = []
+    model = torch.load(model_path)
+    scoring_set = datasets.ChallengeImagesScoring(scoring_data)
+
+    # collate_fn = datasets.collate_fn
+    score_loader = tud.DataLoader(scoring_set, batch_size=1, shuffle=False, num_workers=1)
+
+    for data in tqdm.tqdm(score_loader, desc="scoring", position=0):
+        inputs, crop_array, targets, means, stds, size, center = data
+        prediction, output = predict(torch.device("cuda:0"), model, True, inputs, crop_array, targets, means, stds)
+        output = output.cpu()
+        output = output * stds + means
+        output = output[0].to(dtype=torch.uint8).cpu().numpy()
+
+        outputs_cropped = utils.crop(output, size, center)
+
+        outputs.append(outputs_cropped[2])
+    with open(prediction_file, 'wb') as f:
+        pickle.dump(outputs, f)
+    return
+
+
+def score_pickles(prediction_file: str, target_file: str):
+    # with open(prediction_file, 'rb') as pfh:
+    #     predictions_full = pickle.load(pfh)
+    #
+    # predictions_cropped = [utils.crop(img, size, center) for img, size, center in predictions_full]
+    # predictions = [target_array for image_array, crop_array, target_array in predictions_cropped]
+    #
+    # if not isinstance(predictions, list):
+    #     raise TypeError(f"Expected a list of numpy arrays as pickle file. "
+    #                     f"Got {type(predictions)} object in pickle file instead.")
+    # if not all([isinstance(prediction, np.ndarray) and np.uint8 == prediction.dtype
+    #             for prediction in predictions]):
+    #     raise TypeError("List of predictions contains elements which are not numpy arrays of dtype uint8")
+    #
+    # # Load targets
+    # with open(target_file, 'rb') as tfh:
+    #     targets = pickle.load(tfh)
+    #
+    # targets_cropped = []
+    # for index, image in enumerate(targets["images"]):
+    #     image_array, crop_array, target_array = utils.crop(image,targets["crop_sizes"][index], targets["crop_centers"][index])
+    #     targets_cropped.append(target_array)
+    # #targets = targets["images"]
+    #
+    # if len(targets_cropped) != len(predictions):
+    #     raise IndexError(f"list of targets has {len(targets)} elements "
+    #                      f"but list of submitted predictions has {len(predictions)} elements.")
+    #
+    # mses = [mse(target, prediction) for target, prediction in zip(targets_cropped, predictions)]
+    #
+    # return np.mean(mses)
+
+    with open(prediction_file, 'rb') as pfh:
+        predictions = pickle.load(pfh)
+    if not isinstance(predictions, list):
+        raise TypeError(f"Expected a list of numpy arrays as pickle file. "
+                        f"Got {type(predictions)} object in pickle file instead.")
+
+    if not all([isinstance(prediction, np.ndarray) and np.uint8 == prediction.dtype
+                for prediction in predictions]):
+        raise TypeError("List of predictions contains elements which are not numpy arrays of dtype uint8")
+
+    # Load targets
+    with open(target_file, 'rb') as tfh:
+        targets = pickle.load(tfh)
+    if len(targets) != len(predictions):
+        raise IndexError(f"list of targets has {len(targets)} elements "
+                         f"but list of submitted predictions has {len(predictions)} elements.")
+
+    # Compute MSE for each sample
+    mses = [mse(target, prediction) for target, prediction in zip(targets, predictions)]
+
+    return np.mean(mses)
+
+
+def mse(target_array, prediction_array):
+    if prediction_array.shape != target_array.shape:
+        raise IndexError(f"Target shape is {target_array.shape} but prediction shape is {prediction_array.shape}")
+    prediction_array, target_array = np.asarray(prediction_array, np.float64), np.asarray(target_array, np.float64)
+    return np.mean((prediction_array - target_array) ** 2)
+
 
 if __name__ == '__main__':
     import argparse
     import json
-    
+
     parser = argparse.ArgumentParser()
     parser.add_argument('config_file', help='path to config file', type=str)
     args = parser.parse_args()
     config_file = args.config_file
-    
+
     with open(config_file, 'r') as fh:
         config = json.load(fh)
-    main(**config)
+    if config["scoring"] is True:
+        score(config["target_file"], config["model_path"], config["prediction_file"])
+    else:
+        main(**config)
+# python3 -m tensorboard.main --logdir=/home/matthias/git/PiP_Project_Challenge/results/tensorboard

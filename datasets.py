@@ -1,25 +1,4 @@
 # -*- coding: utf-8 -*-
-"""example_project/datasets.py
-
-Author -- Michael Widrich
-Contact -- widrich@ml.jku.at
-Date -- 01.02.2020
-
-###############################################################################
-
-The following copyright statement applies to all code within this file.
-
-Copyright statement:
-This material, no matter whether in printed or electronic form, may be used for
-personal and non-commercial educational use only. Any reproduction of this
-manuscript, no matter whether as a whole or in parts, no matter whether in
-printed or in electronic form, requires explicit prior acceptance of the
-authors.
-
-###############################################################################
-
-Datasets file of example project.
-"""
 
 import numpy as np
 from torch.utils.data import Dataset
@@ -27,78 +6,131 @@ import torchvision
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as TF
 import PIL
+import glob
+import os
+import utils
+from PIL import Image
+import cv2
+import random
+import torch
 
 
-def rgb2gray(rgb_array: np.ndarray, r=0.2989, g=0.5870, b=0.1140):
-    """Convert numpy array with 3 color channels of shape (..., 3) to grayscale"""
-    grayscale_array = (rgb_array[..., 0] * r +
-                       rgb_array[..., 1] * g +
-                       rgb_array[..., 2] * b)
-    grayscale_array = np.round(grayscale_array)
-    grayscale_array = np.asarray(grayscale_array, dtype=np.uint8)
-    return grayscale_array
+class ChallengeImagesReducedBatched(Dataset):
+    def __init__(self, data_folder: str):
+        files = sorted(glob.glob(os.path.join(data_folder, '**/*.jpg'), recursive=True))
+        self.data = files
 
-
-class CIFAR10(Dataset):
-    def __init__(self, data_folder: str = 'cifar10'):
-        """Dataset providing CIFAR10 grayscale images as inputs"""
-        # Load or download CIFAR10 dataset
-        cifar10 = torchvision.datasets.CIFAR10(data_folder, train=True, download=True)
-        # Get images and convert them to grayscale
-        self.data = rgb2gray(cifar10.data)
-    
     def __len__(self):
         return len(self.data)
-    
+
     def __getitem__(self, idx):
         image_data = self.data[idx]
-        
-        return image_data, idx
+        # image_array, crop_array, target_array = utils.crop(np.array(Image.open(image_data)), (7, 11), (30, 50))
+        # print(image_data)
+        return image_data
 
 
-class RotatedImages(Dataset):
-    def __init__(self, dataset: Dataset, rotation_angle: float = 45.,
-                 transform_chain: transforms.Compose = None):
-        """Provides images from 'dataset' as inputs and images rotated by 'rotation_angle' as targets"""
-        # Get dataset
-        self.dataset = dataset
-        # Set rotation angle
-        self.rotation_angle = rotation_angle
-        # Set torch transforms
-        self.transform_chain = transform_chain
-    
+class ChallengeImagesReduced(Dataset):
+    def __init__(self, data_folder: str):
+        files = sorted(glob.glob(os.path.join(data_folder, '**/*.jpg'), recursive=True))
+        self.data = files
+
     def __len__(self):
-        return len(self.dataset)
-    
+        return len(self.data)
+
     def __getitem__(self, idx):
-        image_data, idx = self.dataset.__getitem__(idx)
-        image_data = torchvision.transforms.functional.to_pil_image(image_data)
-        if self.transform_chain is not None:
-            image_data = self.transform_chain(image_data)
-        # Create rotated target
-        rotated_image_data = TF.rotate(image_data, angle=self.rotation_angle, resample=PIL.Image.BILINEAR)
-        # Crop and resize to get rid of unknown image parts
-        image_data = TF.resized_crop(image_data, i=8, j=8, h=16, w=16, size=32)
-        rotated_image_data = TF.resized_crop(rotated_image_data, i=8, j=8, h=16, w=16, size=32)
-        # Convert to float32
-        image_data = np.asarray(image_data, dtype=np.float32)
-        rotated_image_data = np.asarray(rotated_image_data, dtype=np.float32)
-        # Perform normalization based on input values of individual sample
-        mean = image_data.mean()
-        std = image_data.std()
-        image_data[:] -= mean
-        image_data[:] /= std
-        rotated_image_data[:] -= mean
-        rotated_image_data[:] /= std
-        # Add information about relative position in image to inputs
-        # full_inputs = image_data  # Not feeding information about the position in the image would be bad for our CNN
-        full_inputs = np.zeros(shape=(*image_data.shape, 3), dtype=image_data.dtype)
-        full_inputs[..., 0] = image_data
-        full_inputs[np.arange(full_inputs.shape[0]), :, 1] = np.linspace(start=-1, stop=1, num=full_inputs.shape[1])
-        full_inputs[:, :, 2] = np.transpose(full_inputs[:, :, 1])
-        
-        # Convert numpy arrays to tensors
-        full_inputs = TF.to_tensor(full_inputs)
-        rotated_image_data = TF.to_tensor(rotated_image_data)
-        
-        return full_inputs, rotated_image_data, idx
+        image_data = self.data[idx]
+
+        # img = Image.open(image_data)
+        img = cv2.imread(image_data, cv2.IMREAD_UNCHANGED)
+        height = 90
+        width = 90
+        dim = (width, height)
+        res = cv2.resize(img, dim, interpolation=cv2.INTER_LINEAR)
+        crop_height = random.randrange(5, 21, 2)
+        crop_width = random.randrange(5, 21, 2)
+        image_array, crop_array, target_array = utils.crop(np.array(res),
+                                                           (crop_height,
+                                                            crop_width),
+                                                           (random.randrange(20 + crop_height,
+                                                                             height - 20 - crop_height),
+                                                            random.randrange(20 + crop_width, width - 20 - crop_width)))
+        # print(image_data)
+        return image_array, crop_array, target_array, idx
+
+class ChallengeImagesScoring(Dataset):
+    def __init__(self, data: dict):
+        self.data = data["images"]
+        self.crop_sizes = data["crop_sizes"]
+        self.crop_centers = data["crop_centers"]
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        image_data = self.data[idx]
+
+        # img = Image.open(image_data)
+        #img = cv2.imread(image_data, cv2.IMREAD_UNCHANGED)
+        # height = 90
+        # width = 90
+        # dim = (width, height)
+        # res = cv2.resize(img, dim, interpolation=cv2.INTER_LINEAR)
+        # crop_height = random.randrange(5, 21, 2)
+        # crop_width = random.randrange(5, 21, 2)
+        img = Image.fromarray(image_data)
+        image = np.array(img)
+        mean = image.mean()
+        std = image.std()
+        image = (image - mean) / std
+
+        image_array, crop_array, target_array = utils.crop(np.array(image),
+                                                           self.crop_sizes[idx],self.crop_centers[idx])
+        # print(image_data)
+        return image_array, crop_array, target_array, mean, std,self.crop_sizes[idx],self.crop_centers[idx]
+
+def collate_fn(image_data_list: list):
+    # targets = [sample[2] for sample in batch_as_list]
+    # max_h = np.max([target.shape[0] for target in targets])
+    # max_w = np.max([target.shape[1] for target in targets])
+    # stacked_targets = torch.zeors(size=(len(targets), max_h, max_w))
+    # for i, target in enumerate(targets):
+    #    stacked_targets[i,]
+    # return torch.stack(batch_as_list[0]), torch.stack(batch_as_list[1])
+
+    height = random.randrange(70, 100, 1)
+    width = random.randrange(70, 100, 1)
+    dim = (width, height)
+    crop_height = random.randrange(5, 21, 2)
+    crop_width = random.randrange(5, 21, 2)
+    crop_center_x = random.randrange(20 + (crop_height // 2), height - 20 - (crop_height // 2))
+    crop_center_y = random.randrange(20 + (crop_width // 2), width - 20 - (crop_width // 2))
+
+    image_list = []
+    crop_list = []
+    target_list = []
+    means = []
+    stds = []
+    # images = torch.tensor(batch_size,height,width)
+    # crops = torch.tensor(batch_size,height,width)
+    # targets = torch.tensor(batch_size,height,width)
+
+    for image_data in image_data_list:
+        img = cv2.imread(image_data, cv2.IMREAD_UNCHANGED)
+        res = cv2.resize(img, dim, interpolation=cv2.INTER_LANCZOS4)
+        # img = Image.open(image_data)
+        # transorm = torchvision.transforms.Resize(dim,Image.LANCZOS)
+        image = np.array(res)
+        mean = image.mean()
+        std = image.std()
+        image = (image - mean) / std
+        means.append(mean)
+        stds.append(std)
+        image_array, crop_array, target_array = utils.crop(np.array(image),
+                                                           (crop_height,
+                                                            crop_width),
+                                                           (crop_center_x, crop_center_y))
+        image_list.append(torch.tensor(image_array))
+        crop_list.append(torch.tensor(crop_array))
+        target_list.append(torch.tensor(target_array))
+    return torch.stack(image_list), torch.stack(crop_list), torch.stack(target_list), means, stds

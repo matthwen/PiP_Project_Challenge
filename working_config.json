@@ -1,13 +1,22 @@
 {
+  "data_path": "/home/matthias/Documents/project_fotos",
   "results_path": "results",
   "device": "cuda:0",
-  "learningrate": 1e-3,
+  "learningrate": 1e-5,
   "weight_decay": 1e-5,
-  "n_updates": 5e4,
+  "n_updates": 5e5,
+  "testrun": false,
+  "memory_debug": false,
+  "batch_size": 16,
+  "num_workers": 10,
+  "scoring": true,
+  "model_path": "/home/matthias/git/PiP_Project_Challenge/results/2020_08_19_23_21_35/best_model.pt",
+  "target_file": "/home/matthias/Downloads/challenge_testset.pkl",
+  "prediction_file": "/home/matthias/git/PiP_Project_Challenge/results/scoring/prediction.pkl",
   "network_config": {
-    "n_hidden_layers": 3,
-    "n_in_channels": 3,
+    "n_hidden_layers": 5,
+    "n_in_channels": 1,
     "n_kernels": 32,
-    "kernel_size": 7
+    "kernel_size": 5
   }
 }
